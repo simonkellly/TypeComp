@@ -44,6 +44,8 @@ for (const roundId of normalRounds) {
     .done()
     .assign();
 
+  round.scrambleSetCountFromUniqueGroups();
+
   const judgesCount = STAFF_REQUIREMENTS.judges;
 
   const groups = tc.groups(roundId);

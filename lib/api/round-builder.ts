@@ -376,6 +376,137 @@ export class RoundBuilder {
     return this;
   }
 
+  scrambleSetCount(count: number): this {
+    const { competition } = this.ctx;
+    const round = getWcifRound(competition, this.roundId);
+
+    if (!round) {
+      throw new Error(`Round ${this.roundId} not found in WCIF`);
+    }
+
+    round.scrambleSetCount = count;
+    return this;
+  }
+
+  scrambleSetCountFromUniqueGroups(): this {
+    const { competition } = this.ctx;
+    const round = getWcifRound(competition, this.roundId);
+
+    if (!round) {
+      throw new Error(`Round ${this.roundId} not found in WCIF`);
+    }
+
+    const groupsForRound = getGroupsForRound(competition, this.roundId);
+    const uniqueGroups = deduplicateGroups(groupsForRound);
+    const count = uniqueGroups.length;
+
+    round.scrambleSetCount = count;
+    console.log(
+      `✓ Set scrambleSetCount to ${count} for ${this.roundId} (${uniqueGroups.length} unique groups)`,
+    );
+    return this;
+  }
+
+  scrambleSetCountFromTimeSlots(): this {
+    const { competition } = this.ctx;
+    const round = getWcifRound(competition, this.roundId);
+
+    if (!round) {
+      throw new Error(`Round ${this.roundId} not found in WCIF`);
+    }
+
+    const groupsForRound = getGroupsForRound(competition, this.roundId);
+    const uniqueTimeframes = new Set<string>();
+
+    for (const group of groupsForRound) {
+      if (group.startTime && group.endTime) {
+        uniqueTimeframes.add(`${group.startTime}+${group.endTime}`);
+      }
+    }
+
+    const count = uniqueTimeframes.size;
+    round.scrambleSetCount = count;
+    console.log(
+      `✓ Set scrambleSetCount to ${count} for ${this.roundId} (${uniqueTimeframes.size} unique timeframes)`,
+    );
+    return this;
+  }
+
+  scrambleSetCountFromAdvancement(maxGroupSize: number = 18): this {
+    const { competition } = this.ctx;
+    const round = getWcifRound(competition, this.roundId);
+
+    if (!round) {
+      throw new Error(`Round ${this.roundId} not found in WCIF`);
+    }
+
+    const parsed = this.parseRoundId();
+    if (!parsed || parsed.roundNumber <= 1) {
+      throw new Error(
+        `Cannot calculate advancement for first round ${this.roundId}`,
+      );
+    }
+
+    const event = competition.events.find((e) => e.id === parsed.eventId);
+    if (!event) {
+      throw new Error(`Event ${parsed.eventId} not found`);
+    }
+
+    const prevRoundNumber = parsed.roundNumber - 1;
+    const prevRound = event.rounds[prevRoundNumber - 1];
+    if (!prevRound) {
+      throw new Error(
+        `Previous round ${parsed.eventId}-r${prevRoundNumber} not found`,
+      );
+    }
+
+    let prevRoundCompetitors: number;
+    if (prevRound.results.length > 0) {
+      prevRoundCompetitors = prevRound.results.length;
+    } else {
+      prevRoundCompetitors = competition.persons.filter((p) => {
+        const eventIds = p.registration?.eventIds;
+        if (!Array.isArray(eventIds)) return false;
+        return (
+          p.registration?.status === 'accepted' &&
+          eventIds.some((id) => String(id) === parsed.eventId)
+        );
+      }).length;
+    }
+
+    let advancingCount: number;
+    if (round.advancementCondition) {
+      const condition = round.advancementCondition;
+      if (condition.type === 'ranking') {
+        advancingCount = condition.level ?? 0;
+      } else if (condition.type === 'percent') {
+        advancingCount = Math.ceil(
+          (prevRoundCompetitors * (condition.level ?? 0)) / 100,
+        );
+      } else if (condition.type === 'attemptResult') {
+        // For attemptResult, we can't know exactly, so estimate conservatively
+        // Assume roughly 50% might advance (this is a fallback)
+        advancingCount = Math.ceil(prevRoundCompetitors * 0.5);
+      } else {
+        // Unknown condition type, estimate based on typical advancement
+        advancingCount = Math.ceil(prevRoundCompetitors * 0.5);
+      }
+    } else {
+      // No advancement condition specified, estimate conservatively
+      advancingCount = Math.ceil(prevRoundCompetitors * 0.5);
+    }
+
+    // Calculate number of groups needed
+    const numGroups = Math.ceil(advancingCount / maxGroupSize);
+    const count = Math.max(1, numGroups); // At least 1 group
+
+    round.scrambleSetCount = count;
+    console.log(
+      `✓ Set scrambleSetCount to ${count} for ${this.roundId} (based on ${advancingCount} advancing from previous round, ${maxGroupSize} per group)`,
+    );
+    return this;
+  }
+
   assign(): AssignmentResult {
     const { competition } = this.ctx;
 

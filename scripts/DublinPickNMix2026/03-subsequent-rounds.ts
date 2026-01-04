@@ -58,6 +58,7 @@ for (const roundId of subsequentRounds) {
   }
 
   round.maxGroupSize(18);
+  round.scrambleSetCountFromAdvancement(18);
   round.assign();
 
   let judgesCount = STAFF_REQUIREMENTS.judges;

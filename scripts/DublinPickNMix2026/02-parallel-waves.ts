@@ -6,6 +6,7 @@ import {
 } from '@/lib/api';
 import { combineStaffScorers } from '@/lib/api/scorers';
 import { PersonalBest } from '@/lib/functions/events';
+import { getGroupNumber } from '@/lib/functions/groups-helpers';
 import type { StaffScorer } from '@/lib/functions/staff';
 import { assignParallelEvents, assignStationsBySpeed } from '@/lib/solvers';
 import type { Activity, Person } from '@/lib/types/core';
@@ -337,6 +338,23 @@ for (const eventGroup of parallelEventGroups) {
         }
       }
     }
+
+    const wavesWithCompetitors = new Set<number>();
+    for (const group of tc.groups(roundId)) {
+      const waveNum = getGroupNumber(group);
+      if (
+        waveNum !== null &&
+        tc.persons.filter((p: Person) =>
+          (p.assignments ?? []).some(
+            (a) =>
+              a.activityId === group.id && a.assignmentCode === 'competitor',
+          ),
+        ).length > 0
+      ) {
+        wavesWithCompetitors.add(waveNum);
+      }
+    }
+    tc.round(roundId).scrambleSetCount(wavesWithCompetitors.size);
   }
 }
 
