@@ -264,6 +264,32 @@ for (const eventGroup of parallelEventGroups) {
   const actualWaves = new Set(assignments.values());
   const sortedWaves = Array.from(actualWaves).sort((a, b) => a - b);
 
+  const waveReport: Array<Record<string, number | string>> = [];
+
+  for (const waveNum of sortedWaves) {
+    const waveCompetitors = Array.from(assignments.entries())
+      .filter(([_, wave]) => wave === waveNum)
+      .map(([personId]) => tc.persons.byId(personId))
+      .filter((p): p is Person => p !== undefined);
+
+    const row: Record<string, number | string> = {
+      Wave: waveNum,
+    };
+
+    for (const eventId of eventGroup) {
+      const eventCompetitors = waveCompetitors.filter((c) =>
+        competingIn(eventId)(c),
+      );
+      row[eventId] = eventCompetitors.length > 0 ? eventCompetitors.length : '';
+    }
+
+    row.Competitors = waveCompetitors.length;
+    waveReport.push(row);
+  }
+
+  console.log('\nWave Summary:');
+  console.table(waveReport);
+
   for (const waveNum of sortedWaves) {
     console.log(`\n--- Wave ${waveNum} ---`);
 
