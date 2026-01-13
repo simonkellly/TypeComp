@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../runtime/context';
+import type { ExecutionContext } from '@/engine';
 import type { EventId } from '../types/literals';
 import type { Competition, Event, Person, Round } from '../types/wcif';
 

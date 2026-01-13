@@ -5,26 +5,33 @@ import type {
   Assignment,
   Competition,
   Person,
+  Room,
   Round,
 } from '../types/wcif';
 import { activityCodeContains, parseActivityCode } from './activity-code';
+import { getExtensionData } from './extensions';
+
+function allRooms(competition: Competition): Room[] {
+  return competition.schedule.venues.flatMap((v) => v.rooms);
+}
+
+function allActivities(competition: Competition): Activity[] {
+  return allRooms(competition).flatMap((r) => r.activities);
+}
+
+function forEachActivity(
+  competition: Competition,
+  fn: (activity: Activity) => void,
+): void {
+  for (const activity of allActivities(competition)) {
+    fn(activity);
+  }
+}
 
 export function getAllGroups(competition: Competition): Group[] {
-  const groups: Group[] = [];
-
-  for (const venue of competition.schedule.venues) {
-    for (const room of venue.rooms) {
-      for (const activity of room.activities) {
-        if (activity.childActivities) {
-          for (const childActivity of activity.childActivities) {
-            groups.push(childActivity as Group);
-          }
-        }
-      }
-    }
-  }
-
-  return groups;
+  return allActivities(competition).flatMap(
+    (a) => (a.childActivities ?? []) as Group[],
+  );
 }
 
 export function getGroupsForRoundCode(
@@ -97,52 +104,18 @@ export function getActivityById(
   competition: Competition,
   activityId: number,
 ): Activity | null {
-  const findActivity = (activities: Activity[]): Activity | null => {
-    for (const activity of activities) {
-      if (activity.id === activityId) {
-        return activity;
-      }
-      if (activity.childActivities && activity.childActivities.length > 0) {
-        const found = findActivity(activity.childActivities);
-        if (found) {
-          return found;
-        }
-      }
-    }
-    return null;
-  };
-
-  for (const venue of competition.schedule.venues) {
-    for (const room of venue.rooms) {
-      const found = findActivity(room.activities);
-      if (found) {
-        return found;
-      }
-    }
-  }
-
-  return null;
+  return (
+    allActivities(competition).find((a) => a.id === activityId) ??
+    getAllGroups(competition).find((g) => g.id === activityId) ??
+    null
+  );
 }
 
 export function getGroupForActivityId(
   competition: Competition,
   activityId: number,
 ): Group | null {
-  for (const venue of competition.schedule.venues) {
-    for (const room of venue.rooms) {
-      for (const parentActivity of room.activities) {
-        if (parentActivity.childActivities) {
-          for (const childActivity of parentActivity.childActivities) {
-            if (childActivity.id === activityId) {
-              return childActivity as Group;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return null;
+  return getAllGroups(competition).find((g) => g.id === activityId) ?? null;
 }
 
 export function getStartTime(group: Group, competition: Competition): DateTime {
@@ -197,17 +170,11 @@ export function getMiscActivityForId(
   competition: Competition,
   activityId: number,
 ): Activity | null {
-  for (const venue of competition.schedule.venues) {
-    for (const room of venue.rooms) {
-      for (const activity of room.activities) {
-        if (activity.id === activityId && !activity.childActivities?.length) {
-          return activity;
-        }
-      }
-    }
-  }
-
-  return null;
+  return (
+    allActivities(competition).find(
+      (a) => a.id === activityId && !a.childActivities?.length,
+    ) ?? null
+  );
 }
 
 export function deduplicateGroups(groups: Group[]): Group[] {
@@ -316,4 +283,167 @@ export function overlaps(
   const groupEnd = getEndTime(group, competition);
 
   return groupEnd > startTime && endTime > groupStart;
+}
+
+export function maxActivityId(competition: Competition): number {
+  return Math.max(
+    0,
+    ...allActivities(competition).flatMap((a) => [
+      a.id,
+      ...(a.childActivities ?? []).map((c) => c.id),
+    ]),
+  );
+}
+
+export function groupActivitiesByRound(
+  competition: Competition,
+  roundId: string,
+): Activity[] {
+  const roundActivities = getAllActivitiesForRoundId(competition, roundId);
+
+  return roundActivities.flatMap((parent) =>
+    (parent.childActivities ?? []).filter((child) => {
+      const parsed = parseActivityCode(child.activityCode ?? '');
+      return parsed?.groupNumber !== null;
+    }),
+  );
+}
+
+export function getRoomByActivity(
+  competition: Competition,
+  activityId: number,
+): Room | null {
+  return (
+    allRooms(competition).find((room) =>
+      room.activities.some(
+        (a) =>
+          a.id === activityId ||
+          a.childActivities?.some((c) => c.id === activityId),
+      ),
+    ) ?? null
+  );
+}
+
+export function getStationsByActivity(
+  competition: Competition,
+  activityId: number,
+): number | null {
+  const room = getRoomByActivity(competition, activityId);
+  if (!room) return null;
+
+  const config = getExtensionData<{ stations?: number }>('RoomConfig', room);
+  return config?.stations ?? null;
+}
+
+export function hasDistributedAttempts(roundId: string): boolean {
+  const parsed = parseActivityCode(roundId);
+  return parsed ? ['333fm', '333mbf'].includes(parsed.eventId) : false;
+}
+
+export function isRoundOpenForAssignment(round: Round): boolean {
+  const parsed = parseActivityCode(round.id);
+  if (!parsed) return false;
+
+  if (parsed.roundNumber === 1 && round.results.length === 0) return true;
+
+  if (
+    round.results.length > 0 &&
+    round.results.every((r) => r.attempts.length === 0)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export function hasGroupAssignments(
+  competition: Competition,
+  roundId: string,
+): boolean {
+  const groups = getGroupsForRound(competition, roundId);
+  if (groups.length === 0) return false;
+
+  const activityIds = new Set(groups.map((g) => g.id));
+  return competition.persons.some((p) =>
+    (p.assignments ?? []).some((a) => activityIds.has(a.activityId)),
+  );
+}
+
+export function roundsMissingAssignments(
+  competition: Competition,
+  includeFirstRounds: boolean = false,
+): Round[] {
+  return competition.events
+    .flatMap((e) => e.rounds)
+    .filter((round) => {
+      const parsed = parseActivityCode(round.id);
+      if (!parsed) return false;
+
+      if (!includeFirstRounds && parsed.roundNumber === 1) return false;
+
+      return (
+        isRoundOpenForAssignment(round) &&
+        !hasGroupAssignments(competition, round.id)
+      );
+    });
+}
+
+export function getAllActivityIds(competition: Competition): Set<number> {
+  return new Set(
+    allActivities(competition).flatMap((a) => [
+      a.id,
+      ...(a.childActivities ?? []).map((c) => c.id),
+    ]),
+  );
+}
+
+export function removeOrphanAssignments(competition: Competition): number {
+  const validIds = getAllActivityIds(competition);
+
+  let removed = 0;
+  for (const person of competition.persons) {
+    const before = person.assignments?.length ?? 0;
+    person.assignments = (person.assignments ?? []).filter((a) =>
+      validIds.has(a.activityId),
+    );
+    removed += before - (person.assignments?.length ?? 0);
+  }
+
+  return removed;
+}
+
+export function clearAllAssignmentsAndGroups(competition: Competition): void {
+  for (const person of competition.persons) {
+    person.assignments = [];
+  }
+  forEachActivity(competition, (a) => {
+    a.childActivities = [];
+  });
+}
+
+export function clearEmptyGroups(
+  competition: Competition,
+  roundId: string,
+): number {
+  const groups = getGroupsForRound(competition, roundId);
+  const assigned = new Set(
+    competition.persons.flatMap((p) =>
+      (p.assignments ?? [])
+        .filter((a) => a.assignmentCode === 'competitor')
+        .map((a) => a.activityId),
+    ),
+  );
+
+  const emptyIds = new Set(
+    groups.filter((g) => !assigned.has(g.id)).map((g) => g.id),
+  );
+  if (emptyIds.size === 0) return 0;
+
+  forEachActivity(competition, (a) => {
+    if (a.childActivities) {
+      a.childActivities = a.childActivities.filter((c) => !emptyIds.has(c.id));
+    }
+  });
+  removeOrphanAssignments(competition);
+  return emptyIds.size;
 }

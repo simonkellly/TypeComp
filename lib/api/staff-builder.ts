@@ -1,32 +1,31 @@
 import { DateTime } from 'luxon';
 import type { ExecutionContext } from '@/engine';
-import { parseActivityCode } from '../functions/activity-code';
 import {
-  getActivityById,
+  deduplicateGroups,
   getAllGroups,
   getGroupsForRoundCode,
 } from '../functions/groups-helpers';
-import type { StaffScorer } from '../functions/staff';
+import { fisherYatesShuffle } from '../functions/utils';
 import type {
   Activity,
-  Group,
   JobDefinition,
   Person,
   PersonAssignment,
 } from '../types/core';
 import solver from '../types/lp-solver';
-import type { Assignment } from '../types/wcif';
+import type { Assignment, RegistrantId } from '../types/wcif';
 import type { GroupFilter, PersonFilter } from './filters';
 import { allGroups, registered } from './filters';
-import { combineStaffScorers, fastestScrambler } from './scorers';
+import {
+  combineStaffScorers,
+  fastestScrambler,
+  type StaffScorer,
+} from './staff-scorers';
 
 export interface StaffResult {
   assigned: number;
-
   activities: number;
-
   warnings: string[];
-
   roundId: string;
 }
 
@@ -87,20 +86,12 @@ export class StaffBuilder {
   }
 
   runners(count: number): this {
-    this.jobs.push({
-      name: 'staff-runner',
-      count,
-      assignStations: false,
-    });
+    this.jobs.push({ name: 'staff-runner', count, assignStations: false });
     return this;
   }
 
   dataEntry(count: number): this {
-    this.jobs.push({
-      name: 'staff-dataentry',
-      count,
-      assignStations: false,
-    });
+    this.jobs.push({ name: 'staff-dataentry', count, assignStations: false });
     return this;
   }
 
@@ -111,7 +102,7 @@ export class StaffBuilder {
   ): this {
     if (!name.startsWith('staff-') && name !== 'competitor') {
       console.warn(
-        `Warning: Job name "${name}" should start with 'staff-' for WCIF compatibility`,
+        `Warning: Job "${name}" should start with 'staff-' for WCIF compatibility`,
       );
     }
     this.jobs.push({
@@ -124,7 +115,7 @@ export class StaffBuilder {
   }
 
   preferFastScramblers(eventId?: string): this {
-    this.scorers.push(fastestScrambler(eventId || this.roundId));
+    this.scorers.push(fastestScrambler(eventId ?? this.roundId));
     return this;
   }
 
@@ -153,9 +144,9 @@ export class StaffBuilder {
   assign(): StaffResult {
     const { competition } = this.ctx;
 
-    const allGroups = getGroupsForRoundCode(competition, this.roundId);
+    const allGroupsForRound = getGroupsForRoundCode(competition, this.roundId);
 
-    if (allGroups.length === 0) {
+    if (allGroupsForRound.length === 0) {
       console.warn(`⚠️  No groups found for ${this.roundId}`);
       return {
         assigned: 0,
@@ -165,21 +156,7 @@ export class StaffBuilder {
       };
     }
 
-    const uniqueGroupsByNumber = new Map<number, Group>();
-
-    for (const group of allGroups) {
-      const groupNum = parseInt(
-        group.activityCode.match(/g(\d+)/)?.[1] || '0',
-        10,
-      );
-      if (groupNum > 0 && !uniqueGroupsByNumber.has(groupNum)) {
-        uniqueGroupsByNumber.set(groupNum, group);
-      }
-    }
-
-    const groups = [...uniqueGroupsByNumber.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([_, group]) => group);
+    const groups = deduplicateGroups(allGroupsForRound);
 
     const filteredGroups = groups.filter(this.groupFilter);
 
@@ -195,36 +172,31 @@ export class StaffBuilder {
 
     const activities = filteredGroups as Activity[];
     const activityIds = activities.map((a) => a.id);
-
     const persons = competition.persons.filter(this.personFilter);
 
-    const peopleAlreadyAssigned = competition.persons.filter((person) => {
-      return (person.assignments || []).some((assignment) => {
-        return (
-          assignment.assignmentCode !== 'competitor' &&
-          activityIds.includes(assignment.activityId)
-        );
-      });
-    });
+    const peopleAlreadyAssigned = competition.persons.filter((person) =>
+      (person.assignments ?? []).some(
+        (a) =>
+          a.assignmentCode !== 'competitor' &&
+          activityIds.includes(a.activityId),
+      ),
+    );
 
     if (peopleAlreadyAssigned.length > 0) {
       if (this._overwrite) {
         console.log(
-          `  Removing ${peopleAlreadyAssigned.length} existing staff assignments (overwrite=true)`,
+          `  Removing ${peopleAlreadyAssigned.length} existing staff assignments`,
         );
         peopleAlreadyAssigned.forEach((person) => {
-          person.assignments = (person.assignments || []).filter(
-            (assignment) => {
-              return (
-                assignment.assignmentCode === 'competitor' ||
-                !activityIds.includes(assignment.activityId)
-              );
-            },
+          person.assignments = (person.assignments ?? []).filter(
+            (a) =>
+              a.assignmentCode === 'competitor' ||
+              !activityIds.includes(a.activityId),
           );
         });
       } else {
         console.warn(
-          `⚠️  ${peopleAlreadyAssigned.length} people already have staff assignments. Use overwrite(true) to replace.`,
+          `⚠️  ${peopleAlreadyAssigned.length} people already have staff assignments.`,
         );
         return {
           assigned: 0,
@@ -241,7 +213,7 @@ export class StaffBuilder {
       name: job.name as PersonAssignment['assignmentCode'],
       count: job.count,
       assignStations: job.assignStations,
-      eligibility: job.eligibility || (() => true),
+      eligibility: job.eligibility ?? (() => true),
     }));
 
     if (jobDefinitions.length === 0) {
@@ -256,21 +228,18 @@ export class StaffBuilder {
 
     const combinedScorer =
       this.scorers.length > 0 ? combineStaffScorers(...this.scorers) : null;
-
     const warnings: string[] = [];
-    const assignmentMap = new Map<number, PersonAssignment>();
+    const assignmentMap = new Map<RegistrantId, PersonAssignment>();
     const allGroupsInComp = getAllGroups(competition);
-
-    const assignmentsThisCall = new Map<number, Set<number>>();
+    const assignmentsThisCall = new Map<RegistrantId, Set<number>>();
 
     const unavailableByPerson: Record<
-      number,
+      RegistrantId,
       ((activity: Activity) => boolean)[]
     > = {};
-
     persons.forEach((person) => {
       unavailableByPerson[person.registrantId] =
-        this.unavailableFn(person) || [];
+        this.unavailableFn(person) ?? [];
     });
 
     for (const activity of activities) {
@@ -285,49 +254,33 @@ export class StaffBuilder {
         })
         .map((g) => g.id);
 
-      const getRoundIdFromActivity = (activityId: number): string | null => {
-        const act = getActivityById(competition, activityId);
-        if (!act) return null;
-        const activityCode = act.activityCode || '';
-        const parsed = parseActivityCode(activityCode);
-        if (!parsed || parsed.roundNumber === null) return null;
-        return `${parsed.eventId}-r${parsed.roundNumber}`;
-      };
-
-      const _currentRoundId = getRoundIdFromActivity(activity.id);
-
       const eligiblePeople = persons.filter((person) => {
         if (this._avoidConflicts) {
-          const isCompetingInThisActivity = (person.assignments || []).some(
-            (assignment) =>
-              assignment.activityId === activity.id &&
-              assignment.assignmentCode === 'competitor',
+          const isCompeting = (person.assignments ?? []).some(
+            (a) =>
+              a.activityId === activity.id && a.assignmentCode === 'competitor',
           );
-          if (isCompetingInThisActivity) return false;
+          if (isCompeting) return false;
 
-          const hasTimeConflict = (person.assignments || []).some(
-            (assignment) =>
-              assignment.assignmentCode !== 'competitor' &&
-              conflictingGroupIds.includes(assignment.activityId) &&
-              assignment.activityId !== activity.id,
+          const hasTimeConflict = (person.assignments ?? []).some(
+            (a) =>
+              a.assignmentCode !== 'competitor' &&
+              conflictingGroupIds.includes(a.activityId) &&
+              a.activityId !== activity.id,
           );
           if (hasTimeConflict) return false;
 
-          const previousAssignments = assignmentsThisCall.get(
-            person.registrantId,
-          );
-          if (previousAssignments) {
+          const previous = assignmentsThisCall.get(person.registrantId);
+          if (previous) {
             const hasConflictThisCall = conflictingGroupIds.some(
-              (conflictId) =>
-                conflictId !== activity.id &&
-                previousAssignments.has(conflictId),
+              (id) => id !== activity.id && previous.has(id),
             );
             if (hasConflictThisCall) return false;
           }
         }
 
-        const unavailFns = unavailableByPerson[person.registrantId] || [];
-        return !unavailFns.some((unavailFn) => unavailFn(activity));
+        const unavailFns = unavailableByPerson[person.registrantId] ?? [];
+        return !unavailFns.some((fn) => fn(activity));
       });
 
       const neededPeople = jobDefinitions.reduce(
@@ -336,7 +289,7 @@ export class StaffBuilder {
       );
 
       if (eligiblePeople.length < neededPeople) {
-        const warning = `Not enough people for ${activity.name || activity.activityCode} (needed ${neededPeople}, got ${eligiblePeople.length})`;
+        const warning = `Not enough people for ${activity.name ?? activity.activityCode} (needed ${neededPeople}, got ${eligiblePeople.length})`;
         warnings.push(warning);
         console.warn(`⚠️  ${warning}`);
         continue;
@@ -359,27 +312,25 @@ export class StaffBuilder {
         }
       });
 
-      const shuffled = [...eligiblePeople].sort(() => Math.random() - 0.5);
+      const shuffled = fisherYatesShuffle(eligiblePeople);
 
       shuffled.forEach((person, idx) => {
         constraints[`person-${idx}`] = { min: 0, max: 1 };
 
         let personScore = 0;
-
         if (combinedScorer && !combinedScorer.caresAboutJobs) {
-          personScore += combinedScorer.Score(competition, person, activity);
+          personScore += combinedScorer.score(competition, person, activity);
         }
 
         jobDefinitions.forEach((job) => {
           if (job.eligibility && !job.eligibility(person)) return;
 
           let jobScore = personScore;
-
           if (
             combinedScorer?.caresAboutJobs &&
             !combinedScorer.caresAboutStations
           ) {
-            jobScore += combinedScorer.Score(
+            jobScore += combinedScorer.score(
               competition,
               person,
               activity,
@@ -393,9 +344,8 @@ export class StaffBuilder {
 
           stations.forEach((stationNum) => {
             let score = jobScore;
-
             if (combinedScorer?.caresAboutStations && stationNum !== null) {
-              score += combinedScorer.Score(
+              score += combinedScorer.score(
                 competition,
                 person,
                 activity,
@@ -432,7 +382,7 @@ export class StaffBuilder {
 
       if (!solution.feasible) {
         warnings.push(
-          `Failed to find a solution for ${activity.name || activity.activityCode}`,
+          `Failed to find solution for ${activity.name ?? activity.activityCode}`,
         );
         continue;
       }
@@ -440,10 +390,7 @@ export class StaffBuilder {
       const variableMap = new Map<string, number>();
       for (const [key, value] of Object.entries(solution)) {
         if (
-          key !== 'feasible' &&
-          key !== 'result' &&
-          key !== 'bounded' &&
-          key !== 'isIntegral' &&
+          !['feasible', 'result', 'bounded', 'isIntegral'].includes(key) &&
           typeof value === 'number'
         ) {
           variableMap.set(key, value);
@@ -454,9 +401,8 @@ export class StaffBuilder {
         string,
         { job: JobDefinition; stationNumber: number | null }
       >();
-
       jobDefinitions.forEach((job) => {
-        shuffled.forEach((_person, idx) => {
+        shuffled.forEach((_, idx) => {
           const stations = job.assignStations
             ? Array.from({ length: job.count }, (_, i) => i)
             : [null];
@@ -477,14 +423,11 @@ export class StaffBuilder {
 
         const { job, stationNumber } = jobInfo;
         const parts = key.split('-');
-        const personIdx = parseInt(parts[1] || '0', 10);
+        const personIdx = parseInt(parts[1] ?? '0', 10);
         const person = shuffled[personIdx];
 
         if (!person) return;
-
-        if (!person.assignments) {
-          person.assignments = [];
-        }
+        if (!person.assignments) person.assignments = [];
 
         const newAssignment: Assignment = {
           activityId: activity.id,

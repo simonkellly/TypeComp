@@ -5,16 +5,156 @@ export {
   saveWcif,
   type TypeCompOptions,
 } from '@/engine';
-export * from './api';
+
+export {
+  createTypeComp,
+  fromContext,
+  type PersonQuery,
+  type TypeComp,
+} from './api/context';
+
+export {
+  accepted,
+  ageBetween,
+  allGroups,
+  and,
+  booleanProperty,
+  canScramble,
+  competingIn,
+  competingInAll,
+  competingInAny,
+  everyone,
+  forEvent,
+  forRound,
+  fromCountries,
+  fromCountry,
+  type GroupFilter,
+  gender,
+  groupNumber,
+  groupNumberBetween,
+  hasPB,
+  hasProperty,
+  hasRole,
+  hasStaffAssignments,
+  hasWcaId,
+  isDelegate,
+  isForeigner,
+  isOrganizer,
+  isStaffJudge,
+  isStaffRunner,
+  isStaffScrambler,
+  isTraineeDelegate,
+  nameContains,
+  nameIs,
+  newcomer,
+  nobody,
+  noGroups,
+  nonCompeting,
+  not,
+  notCompetingIn,
+  notCompetingInAny,
+  numberPropertyBetween,
+  numberPropertyEquals,
+  numberPropertyGreaterThan,
+  numberPropertyLessThan,
+  olderThan,
+  or,
+  type PersonFilter,
+  pbFasterThan,
+  pbSlowerThan,
+  registered,
+  registrantId,
+  registrantIds,
+  staffAssignmentCountBetween,
+  stringProperty,
+  stringPropertyIn,
+  wcaId,
+  wcaIdAfter,
+  wcaIdBefore,
+  wcaIds,
+  wcaIdYear,
+  youngerThan,
+} from './api/filters';
+export * as presets from './api/presets';
+export {
+  assignAllRounds,
+  assignBlindfolded,
+  assignGroupifier,
+  assignRound,
+  assignStaff,
+  defaultGroupScorers,
+  type GroupifierOptions,
+  type GroupifierResult,
+  simpleGroupScorers,
+  simpleStaffScorers,
+} from './api/presets';
+export {
+  type AssignmentResult,
+  GroupByBuilder,
+  type GroupOptions,
+  RoundBuilder,
+  StationsBuilder,
+} from './api/round-builder';
+export {
+  balancedScramblerScorer,
+  byFilters,
+  byMatchingValue,
+  combineScorers,
+  combineStaffScorers,
+  conditionalScorer,
+  consecutiveJobScorer,
+  delegateDeprioritizer,
+  differentFirstNames,
+  fastestScrambler,
+  followingGroupScorer,
+  mismatchedStationScorer,
+  preferenceScorer,
+  priorAssignmentScorer,
+  recentlyCompeted,
+  sameCountry,
+  sameJobScorer,
+  sameWcaIdYear,
+  spreadOut,
+  staffScorer,
+} from './api/scorers';
+
+export { StaffBuilder, type StaffResult } from './api/staff-builder';
+
+export {
+  COMMON_STAGE_LAYOUTS,
+  defineStages,
+  type StageConfig,
+  StageManager,
+  singleStage,
+  twoStages,
+} from './api/stages';
+
+export {
+  DISTRIBUTED_EVENTS,
+  getBaseEventForScrambling,
+  getScramblingResultType,
+  isDistributedEvent,
+  isNicheEvent,
+  NICHE_EVENTS,
+  SCRAMBLE_MAP,
+  STAFF_JOBS,
+} from './constants';
+
 export {
   activityCodeContains,
   formatActivityCode,
+  type ParsedActivityCode,
   parseActivityCode,
 } from './functions/activity-code';
+
 export { Events, PersonalBest } from './functions/events';
+
 export {
+  clearAllAssignmentsAndGroups,
+  clearEmptyGroups,
   deduplicateGroups,
   getActivityById,
+  getAllActivityIds,
   getAllGroups,
   getEndTime,
   getGroupForActivityId,
@@ -23,9 +163,13 @@ export {
   getGroupsForRoundCode,
   getStartTime,
   getWcifRound,
+  hasGroupAssignments,
+  isRoundOpenForAssignment,
+  removeOrphanAssignments,
+  roundsMissingAssignments,
 } from './functions/groups-helpers';
-export * from './optimizers';
-export * from './solvers';
+
+export { assignParallelEvents, assignStationsBySpeed } from './solvers';
 export type {
   AssignmentCode,
   AssignmentSet,
@@ -36,12 +180,14 @@ export type {
   Group,
   GroupAssignmentResult,
   JobDefinition,
+  Person,
   PersonAssignment,
   PersonWithAssignments,
   Round,
   RoundWithGroups,
   Scorer,
   StaffAssignmentResult,
+  StaffScorer,
   StationAssignmentRule,
 } from './types/core';
 export type { EventId, EventLiteral, RoundLiteral } from './types/literals';
@@ -54,11 +200,21 @@ export type {
   CompetitionContext,
   Event,
   GroupId,
-  Person,
   PersonalBest as WcifPersonalBest,
   PersonId,
+  RegistrantId,
   Registration,
   Room,
   Schedule,
   Venue,
 } from './types/wcif';
+export { createLogger, logger } from './utils/logger';
+export {
+  assertExists,
+  TypeCompError,
+  validateEventId,
+  validateGroupCount,
+  validateMaxGroupSize,
+  validateRoundId,
+  validateTimeString,
+} from './utils/validation';

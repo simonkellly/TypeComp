@@ -40,3 +40,23 @@ export function intersection<T>(xs: T[], ys: T[]): T[] {
 export function difference<T>(xs: T[], ys: T[]): T[] {
   return xs.filter((x) => !ys.includes(x));
 }
+
+export function chunk<T>(arr: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    result.push(arr.slice(i, i + size));
+  }
+  return result;
+}
+
+export function fisherYatesShuffle<T>(array: T[]): T[] {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const temp: T = shuffled[i] as T;
+    const swapItem: T = shuffled[j] as T;
+    shuffled[i] = swapItem;
+    shuffled[j] = temp;
+  }
+  return shuffled;
+}

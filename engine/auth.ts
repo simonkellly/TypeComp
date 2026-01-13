@@ -157,7 +157,7 @@ export async function login(): Promise<void> {
   });
 }
 
-export async function getAccessToken(): Promise<string> {
+async function getAccessToken(): Promise<string> {
   init();
   await loadTokens();
   if (!config) throw new Error('Initialization failed');
@@ -220,7 +220,7 @@ export async function getWcif(
   }
 }
 
-export async function patchWcif(
+async function patchWcif(
   competitionId: string,
   wcif: Competition,
   keys: string[],

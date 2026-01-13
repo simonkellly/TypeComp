@@ -7,6 +7,7 @@ export type {
   Event,
   Person,
   PersonalBest,
+  RegistrantId,
   Registration,
   Room,
   Round,
@@ -20,7 +21,6 @@ export interface CompetitionContext {
 }
 
 export type ActivityCode = string;
-export type EventId = string;
 export type RoundId = string;
 export type GroupId = string;
 export type PersonId = number;

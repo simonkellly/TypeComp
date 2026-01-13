@@ -4,11 +4,13 @@ export {
   type PersonQuery,
   type TypeComp,
 } from './context';
+
 export {
   accepted,
+  ageBetween,
   allGroups,
   and,
-  type ContextualPersonFilter,
+  booleanProperty,
   canScramble,
   competingIn,
   competingInAll,
@@ -23,10 +25,16 @@ export {
   groupNumber,
   groupNumberBetween,
   hasPB,
+  hasProperty,
   hasRole,
+  hasStaffAssignments,
   hasWcaId,
   isDelegate,
+  isForeigner,
   isOrganizer,
+  isStaffJudge,
+  isStaffRunner,
+  isStaffScrambler,
   isTraineeDelegate,
   nameContains,
   nameIs,
@@ -37,6 +45,11 @@ export {
   not,
   notCompetingIn,
   notCompetingInAny,
+  numberPropertyBetween,
+  numberPropertyEquals,
+  numberPropertyGreaterThan,
+  numberPropertyLessThan,
+  olderThan,
   or,
   type PersonFilter,
   pbFasterThan,
@@ -44,24 +57,30 @@ export {
   registered,
   registrantId,
   registrantIds,
+  staffAssignmentCountBetween,
+  stringProperty,
+  stringPropertyIn,
   wcaId,
   wcaIdAfter,
   wcaIdBefore,
   wcaIds,
   wcaIdYear,
+  youngerThan,
 } from './filters';
+
 export * as presets from './presets';
+
 export {
+  assignAllRounds,
   assignBlindfolded,
-  assignLaterRound,
+  assignGroupifier,
   assignRound,
   assignStaff,
-  assignWaveStaff,
   defaultGroupScorers,
-  quickAssign,
-  type SmallCompetitionOptions,
-  type StandardStaffOptions,
-  type WaveCompetitionOptions,
+  type GroupifierOptions,
+  type GroupifierResult,
+  simpleGroupScorers,
+  simpleStaffScorers,
 } from './presets';
 export {
   type AssignmentResult,
@@ -70,17 +89,37 @@ export {
   RoundBuilder,
   StationsBuilder,
 } from './round-builder';
+
 export {
+  balancedScramblerScorer,
   byFilters,
   byMatchingValue,
   combineScorers,
   combineStaffScorers,
+  conditionalScorer,
+  consecutiveJobScorer,
+  delegateDeprioritizer,
   differentFirstNames,
   fastestScrambler,
+  followingGroupScorer,
+  mismatchedStationScorer,
+  preferenceScorer,
+  priorAssignmentScorer,
   recentlyCompeted,
+  type StaffScorer,
   sameCountry,
+  sameJobScorer,
   sameWcaIdYear,
   spreadOut,
   staffScorer,
 } from './scorers';
 export { StaffBuilder, type StaffResult } from './staff-builder';
+
+export {
+  COMMON_STAGE_LAYOUTS,
+  defineStages,
+  type StageConfig,
+  StageManager,
+  singleStage,
+  twoStages,
+} from './stages';

@@ -8,7 +8,7 @@ import {
   getGroupsForRound,
 } from '../functions/groups-helpers';
 import type { Group, Person } from '../types/core';
-import type { Competition } from '../types/wcif';
+import type { Competition, RegistrantId } from '../types/wcif';
 import type { PersonFilter } from './filters';
 import { registered } from './filters';
 import { RoundBuilder } from './round-builder';
@@ -45,7 +45,7 @@ export interface PersonQuery {
 
   byWcaId(wcaId: string): Person | undefined;
 
-  byId(registrantId: number): Person | undefined;
+  byId(registrantId: RegistrantId): Person | undefined;
 
   count(predicate?: PersonFilter): number;
 }
@@ -69,7 +69,7 @@ class PersonQueryImpl implements PersonQuery {
     return this.competition.persons.find((p: Person) => p.wcaId === wcaId);
   }
 
-  byId(registrantId: number): Person | undefined {
+  byId(registrantId: RegistrantId): Person | undefined {
     return this.competition.persons.find(
       (p: Person) => p.registrantId === registrantId,
     );

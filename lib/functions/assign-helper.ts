@@ -1,5 +1,6 @@
 import type { Group, Person, Scorer } from '../types/core';
 import type { LPSolverModel } from '../types/lp-solver';
+import { fisherYatesShuffle } from './utils';
 
 interface QueueItem {
   person: Person;
@@ -29,6 +30,7 @@ export function constructAssignmentModel(
   groupSizeLimit?: number,
   preAssignedByGroup?: { [groupId: number]: number },
 ): LPSolverModel {
+  const shuffledQueue = fisherYatesShuffle(queue);
   const variables: Record<string, Record<string, number>> = {};
   const constraints: Record<
     string,
@@ -36,7 +38,7 @@ export function constructAssignmentModel(
   > = {};
   const ints: Record<string, number> = {};
 
-  queue.slice(0, 100).forEach((queueItem) => {
+  shuffledQueue.slice(0, 100).forEach((queueItem) => {
     const personKey = queueItem.person.registrantId.toString();
 
     constraints[personKey] = { min: 0, max: 1 };
@@ -133,7 +135,7 @@ export function constructAssignmentModel(
     }
   });
 
-  const numToAssign = Math.min(queue.length, groupsToUse.length);
+  const numToAssign = Math.min(shuffledQueue.length, groupsToUse.length);
 
   constraints.totalAssigned = { equal: numToAssign };
 

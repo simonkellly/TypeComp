@@ -1,4 +1,4 @@
-import type { Activity, Competition, Person } from '../types/wcif';
+import type { Activity, Competition, Person } from '@/lib/types/wcif';
 
 export interface MutationTracker {
   persons: PersonMutation[];
@@ -87,22 +87,18 @@ export function applyMutations(
             ? { ...p, ...mutation.changes }
             : p;
         });
-
         break;
       }
       case 'create': {
         updated.persons = [...updated.persons, mutation.person];
-
         break;
       }
       case 'delete': {
         updated.persons = updated.persons.filter(
           (p) => p.registrantId !== mutation.person.registrantId,
         );
-
         break;
       }
-      default:
     }
   }
 
@@ -140,7 +136,6 @@ export function applyMutations(
       case 'update': {
         visitActivities((activities, index) => {
           const existing = activities[index];
-
           if (existing) {
             activities[index] = {
               ...existing,
@@ -148,26 +143,22 @@ export function applyMutations(
             } as Activity;
           }
         });
-
         break;
       }
       case 'delete': {
         visitActivities((activities, index) => {
           activities.splice(index, 1);
         });
-
         break;
       }
       case 'create': {
         const venues = updated.schedule.venues || [];
-
         if (
           venues.length > 0 &&
           venues[0]?.rooms &&
           venues[0].rooms.length > 0
         ) {
           const room = venues[0].rooms[0];
-
           if (room) {
             if (!room.activities) {
               room.activities = [];
@@ -187,10 +178,8 @@ export function applyMutations(
             room.activities.push(activity);
           }
         }
-
         break;
       }
-      default:
     }
   }
 

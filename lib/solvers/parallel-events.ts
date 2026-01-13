@@ -1,11 +1,13 @@
+import type { RegistrantId } from '@wca/helpers';
+import type { ExecutionContext } from '@/engine';
 import { competingIn, isDelegate, registered } from '../api/filters';
 import { PersonalBest } from '../functions/events';
-import type { ExecutionContext } from '../runtime/context';
+import { fisherYatesShuffle } from '../functions/utils';
 import type { Person } from '../types/core';
 import { type CPModel, type CPSolution, solveCP } from './ortools-bridge';
 
 export interface ParallelAssignmentResult {
-  assignments: Map<number, number>;
+  assignments: Map<RegistrantId, number>;
 
   groupSizes: number[];
 
@@ -22,6 +24,8 @@ export interface ParallelAssignmentOptions {
   solverScript?: string;
 
   verbose?: boolean;
+
+  waveExclusions?: Map<RegistrantId, number[]>;
 }
 
 export async function assignParallelEvents(
@@ -29,7 +33,13 @@ export async function assignParallelEvents(
   eventIds: string[],
   options: ParallelAssignmentOptions,
 ): Promise<ParallelAssignmentResult> {
-  const { maxGroupSize, groupCount, solverScript, verbose = false } = options;
+  const {
+    maxGroupSize,
+    groupCount,
+    solverScript,
+    verbose = false,
+    waveExclusions,
+  } = options;
 
   if (verbose) {
     console.log('Starting parallel event assignment optimization...');
@@ -39,8 +49,10 @@ export async function assignParallelEvents(
 
   const allCompetitors = ctx.competition.persons.filter(registered);
 
-  const competitors = allCompetitors.filter((comp) =>
-    eventIds.some((eventId) => competingIn(eventId)(comp)),
+  const competitors = fisherYatesShuffle(
+    allCompetitors.filter((comp) =>
+      eventIds.some((eventId) => competingIn(eventId)(comp)),
+    ),
   );
 
   if (verbose) {
@@ -65,7 +77,7 @@ export async function assignParallelEvents(
     console.log(`Target group sizes: ${targetSizes.join(', ')}`);
   }
 
-  const competitorEvents = new Map<number, string[]>();
+  const competitorEvents = new Map<RegistrantId, string[]>();
 
   competitors.forEach((comp) => {
     const events = eventIds.filter((eventId) => competingIn(eventId)(comp));
@@ -82,6 +94,7 @@ export async function assignParallelEvents(
     targetSizes,
     maxGroupSize,
     delegates,
+    waveExclusions,
   );
 
   if (verbose) {
@@ -172,13 +185,15 @@ function calculateGroupSizes(
 
 function buildAssignmentModel(
   competitors: Person[],
-  competitorEvents: Map<number, string[]>,
+  competitorEvents: Map<RegistrantId, string[]>,
   eventIds: string[],
   groupCount: number,
   targetSizes: number[],
   _maxGroupSize: number,
   delegates: Person[] = [],
+  waveExclusions?: Map<RegistrantId, number[]>,
 ): CPModel {
+  const shuffledCompetitors = fisherYatesShuffle(competitors);
   const variables: Record<string, Record<string, number>> = {};
   const constraints: Record<
     string,
@@ -186,7 +201,7 @@ function buildAssignmentModel(
   > = {};
   const integers: string[] = [];
 
-  for (const competitor of competitors) {
+  for (const competitor of shuffledCompetitors) {
     for (let group = 1; group <= groupCount; group++) {
       const varName = `p${competitor.registrantId}_w${group}`;
       const personConstraint = `person_${competitor.registrantId}`;
@@ -203,7 +218,7 @@ function buildAssignmentModel(
   const eventCompetitorCounts = new Map<string, number>();
 
   for (const eventId of eventIds) {
-    const count = competitors.filter((c) => {
+    const count = shuffledCompetitors.filter((c) => {
       const events = competitorEvents.get(c.registrantId) || [];
 
       return events.includes(eventId);
@@ -227,8 +242,26 @@ function buildAssignmentModel(
     }
   }
 
-  for (const competitor of competitors) {
+  for (const competitor of shuffledCompetitors) {
     constraints[`person_${competitor.registrantId}`] = { equal: 1 };
+  }
+
+  if (waveExclusions) {
+    for (const [registrantId, excludedWaves] of waveExclusions) {
+      for (const wave of excludedWaves) {
+        if (wave >= 1 && wave <= groupCount) {
+          const varName = `p${registrantId}_w${wave}`;
+          if (variables[varName]) {
+            const exclusionConstraint = `exclude_${registrantId}_w${wave}`;
+            const varObj = variables[varName];
+            if (varObj) {
+              varObj[exclusionConstraint] = 1;
+            }
+            constraints[exclusionConstraint] = { equal: 0 };
+          }
+        }
+      }
+    }
   }
 
   for (let group = 1; group <= groupCount; group++) {
@@ -264,7 +297,7 @@ function buildAssignmentModel(
         hasEventVarObj[linkConstraint2] = 1;
       }
 
-      for (const competitor of competitors) {
+      for (const competitor of shuffledCompetitors) {
         const events = competitorEvents.get(competitor.registrantId) || [];
 
         if (!events.includes(eventId)) {
@@ -322,8 +355,8 @@ function extractAssignments(
   competitors: Person[],
   groupCount: number,
   solution: CPSolution,
-): Map<number, number> {
-  const assignments = new Map<number, number>();
+): Map<RegistrantId, number> {
+  const assignments = new Map<RegistrantId, number>();
 
   for (const competitor of competitors) {
     for (let group = 1; group <= groupCount; group++) {
@@ -349,17 +382,18 @@ export function assignStationsBySpeed(
   for (const eventId of eventIds) {
     const pbType = eventId.includes('bf') ? 'single' : 'average';
 
-    const eventScores = persons.map((p) => {
-      const pb = PersonalBest(p, eventId, pbType);
-      return {
-        id: p.registrantId,
-        score: pb === null || pb <= 0 ? Infinity : pb,
-      };
-    });
+    const eventScores = persons
+      .filter((p) => competingIn(eventId)(p))
+      .map((p) => {
+        const pb = PersonalBest(p, eventId, pbType);
+        return {
+          id: p.registrantId,
+          score: pb === null || pb <= 0 ? Infinity : pb,
+        };
+      })
+      .sort((a, b) => a.score - b.score);
 
-    eventScores.sort((a, b) => a.score - b.score);
-
-    const eventRankMap = new Map<number, number>();
+    const eventRankMap = new Map<RegistrantId, number>();
     eventScores.forEach((item, index) => {
       const rank = item.score === Infinity ? persons.length + 1 : index + 1;
       eventRankMap.set(item.id, rank);
@@ -370,24 +404,41 @@ export function assignStationsBySpeed(
 
   const scored = persons.map((person) => {
     let bestRank = Infinity;
-    let sumRanks = 0;
+    let eventsWithBestRank = 0;
+    let sumWorldRanks = 0;
+    let worldRankCount = 0;
+    let hasAnyRank = false;
 
     for (const eventId of eventIds) {
-      if (!competingIn(eventId)(person)) {
-        sumRanks += persons.length + 1;
-        continue;
+      if (!competingIn(eventId)(person)) continue;
+
+      const rank = rankings.get(eventId)?.get(person.registrantId);
+      if (rank === undefined) continue;
+
+      hasAnyRank = true;
+      if (rank < bestRank) {
+        bestRank = rank;
+        eventsWithBestRank = 1;
+      } else if (rank === bestRank) {
+        eventsWithBestRank++;
       }
 
-      const rank =
-        rankings.get(eventId)?.get(person.registrantId) ?? persons.length + 1;
-      if (rank < bestRank) bestRank = rank;
-      sumRanks += rank;
+      const pbType = eventId.includes('bf') ? 'single' : 'average';
+      const pb = person.personalBests?.find(
+        (p) => p.eventId === eventId && p.type === pbType,
+      );
+      if (pb?.worldRanking) {
+        sumWorldRanks += pb.worldRanking;
+        worldRankCount++;
+      }
     }
 
     return {
       person,
-      bestRank,
-      sumRanks,
+      bestRank: hasAnyRank ? bestRank : Infinity,
+      eventsWithBestRank,
+      avgWorldRank:
+        worldRankCount > 0 ? sumWorldRanks / worldRankCount : Infinity,
     };
   });
 
@@ -395,15 +446,16 @@ export function assignStationsBySpeed(
     if (a.bestRank !== b.bestRank) {
       return a.bestRank - b.bestRank;
     }
-    if (a.sumRanks !== b.sumRanks) {
-      return a.sumRanks - b.sumRanks;
+    if (a.eventsWithBestRank !== b.eventsWithBestRank) {
+      return b.eventsWithBestRank - a.eventsWithBestRank;
     }
-
-    return a.person.registrantId - b.person.registrantId;
+    if (a.avgWorldRank !== b.avgWorldRank) {
+      return a.avgWorldRank - b.avgWorldRank;
+    }
+    return Math.random() - 0.5;
   });
 
-  const stations = new Map<number, number>();
-
+  const stations = new Map<RegistrantId, number>();
   scored.forEach((item, idx) => {
     stations.set(item.person.registrantId, idx + 1);
   });

@@ -1,18 +1,7 @@
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import {
-  createMutationTracker,
-  type MutationTracker,
-} from '@/lib/runtime/mutations';
 import type { Competition } from '@/lib/types/wcif';
-
-export {
-  getAccessToken,
-  getWcif,
-  login,
-  patchWcif,
-  patchWcifWithRetries,
-} from './auth';
+import { createMutationTracker, type MutationTracker } from './mutations';
 
 export interface TypeCompOptions {
   dryRun: boolean;
@@ -22,15 +11,18 @@ export interface TypeCompOptions {
   commit: boolean;
 
   verbose: boolean;
+
+  clean: boolean;
 }
 
-export function parseCliArgs(): TypeCompOptions {
+function parseCliArgs(): TypeCompOptions {
   const { values } = parseArgs({
     args: process.argv.slice(2),
     options: {
       commit: { type: 'boolean', short: 'c', default: false },
       'no-local-cache': { type: 'boolean', default: false },
       verbose: { type: 'boolean', short: 'v', default: false },
+      clean: { type: 'boolean', default: false },
     },
     strict: false,
     allowPositionals: true,
@@ -39,12 +31,14 @@ export function parseCliArgs(): TypeCompOptions {
   const commit = values.commit === true;
   const noLocalCache = values['no-local-cache'] === true;
   const verbose = values.verbose === true;
+  const clean = values.clean === true;
 
   return {
     dryRun: !commit,
     noLocalCache,
     commit,
     verbose,
+    clean,
   };
 }
 
@@ -129,6 +123,16 @@ export async function createContext(
     const { getWcif } = await import('./auth');
 
     competition = await getWcif(competitionId, true);
+  }
+
+  if (mergedOptions.clean) {
+    const { cleanWcif } = await import('./clean');
+    cleanWcif(competition);
+    if (mergedOptions.verbose) {
+      console.log(
+        '🧹 Cleaned WCIF: removed assignments, groups, and custom extensions',
+      );
+    }
   }
 
   const ctx: ExecutionContext = {

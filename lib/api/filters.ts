@@ -1,16 +1,21 @@
 import { DateTime } from 'luxon';
+import {
+  getBaseEventForScrambling,
+  getScramblingResultType,
+} from '../constants';
 import { PersonalBest } from '../functions/events';
+import {
+  getBooleanProperty,
+  getNumberProperty,
+  getStringProperty,
+  hasPersonProperty,
+} from '../functions/extensions';
 import type { Group, Person } from '../types/core';
-import type { Competition } from '../types/wcif';
+import type { Competition, RegistrantId } from '../types/wcif';
+import { extractGroupNumber } from '../utils/activity-utils';
 
 export type PersonFilter = (person: Person) => boolean;
-
 export type GroupFilter = (group: Group) => boolean;
-
-export type ContextualPersonFilter = (
-  person: Person,
-  competition: Competition,
-) => boolean;
 
 export function and<T>(
   ...filters: ((item: T) => boolean)[]
@@ -97,25 +102,9 @@ export function pbSlowerThan(
 }
 
 export function canScramble(eventId: string): PersonFilter {
-  const SCRAMBLE_MAP: Record<string, string> = {
-    '333': '333',
-    '333bf': '333',
-    '333oh': '333',
-    '333fm': '333',
-    '333mbf': '333',
-    '444': '444',
-    '444bf': '444',
-    '555': '555',
-    '555bf': '555',
-  };
-
-  const baseEventId = SCRAMBLE_MAP[eventId] ?? eventId;
-  const resultType =
-    baseEventId.includes('bf') || baseEventId.includes('mbf')
-      ? 'single'
-      : 'average';
-
-  return hasPB(baseEventId, resultType as 'single' | 'average');
+  const baseEventId = getBaseEventForScrambling(eventId);
+  const resultType = getScramblingResultType(eventId);
+  return hasPB(baseEventId, resultType);
 }
 
 export function fromCountry(countryIso2: string): PersonFilter {
@@ -126,10 +115,24 @@ export function fromCountries(...countries: string[]): PersonFilter {
   return or(...countries.map(fromCountry));
 }
 
+export function isForeigner(competition: Competition): PersonFilter {
+  const compCountry = competition.schedule.venues[0]?.countryIso2;
+  return (person) => (compCountry ? person.countryIso2 !== compCountry : false);
+}
+
 export const hasWcaId: PersonFilter = (person) =>
   person.wcaId !== null && person.wcaId !== undefined;
 
 export const newcomer: PersonFilter = not(hasWcaId);
+
+export function wcaId(id: string): PersonFilter {
+  return (person) => person.wcaId === id;
+}
+
+export function wcaIds(...ids: string[]): PersonFilter {
+  const idSet = new Set(ids);
+  return (person) => person.wcaId != null && idSet.has(person.wcaId);
+}
 
 export function wcaIdYear(year: number): PersonFilter {
   return (person) => {
@@ -155,26 +158,13 @@ export function wcaIdAfter(year: number): PersonFilter {
   };
 }
 
-export function gender(g: 'm' | 'f' | 'o'): PersonFilter {
-  return (person) => person.gender === g;
-}
-
-export function hasRole(role: string): PersonFilter {
-  return (person) => (person.roles || []).includes(role);
-}
-
-export const isDelegate: PersonFilter = hasRole('delegate');
-
-export const isOrganizer: PersonFilter = hasRole('organizer');
-
-export const isTraineeDelegate: PersonFilter = hasRole('trainee-delegate');
-
-export function wcaId(id: string): PersonFilter {
-  return (person) => person.wcaId === id;
-}
-
-export function registrantId(id: number): PersonFilter {
+export function registrantId(id: RegistrantId): PersonFilter {
   return (person) => person.registrantId === id;
+}
+
+export function registrantIds(...ids: RegistrantId[]): PersonFilter {
+  const idSet = new Set(ids);
+  return (person) => idSet.has(person.registrantId);
 }
 
 export function nameContains(str: string): PersonFilter {
@@ -186,61 +176,148 @@ export function nameIs(name: string): PersonFilter {
   return (person) => person.name === name;
 }
 
+export function gender(g: 'm' | 'f' | 'o'): PersonFilter {
+  return (person) => person.gender === g;
+}
+
 function getAge(person: Person, competition: Competition): number | null {
   if (!person.birthdate) return null;
-
   const birthDate = DateTime.fromISO(person.birthdate);
   if (!birthDate.isValid) return null;
-
   const startDateStr = competition.schedule?.startDate;
   const startDate = startDateStr
     ? DateTime.fromISO(startDateStr)
     : DateTime.now();
-
   if (!startDate.isValid) return null;
-
   return startDate.diff(birthDate, 'years').years;
 }
 
-export function age(min: number, max?: number): ContextualPersonFilter {
-  return (person, competition) => {
+export function ageBetween(
+  min: number,
+  max: number,
+  competition: Competition,
+): PersonFilter {
+  return (person) => {
     const personAge = getAge(person, competition);
     if (personAge === null) return false;
-
-    if (personAge < min) return false;
-    if (max !== undefined && personAge > max) return false;
-
-    return true;
+    return personAge >= min && personAge <= max;
   };
 }
 
-export function olderThan(years: number): ContextualPersonFilter {
-  return (person, competition) => {
+export function olderThan(
+  years: number,
+  competition: Competition,
+): PersonFilter {
+  return (person) => {
     const personAge = getAge(person, competition);
     return personAge !== null && personAge > years;
   };
 }
 
-export function youngerThan(years: number): ContextualPersonFilter {
-  return (person, competition) => {
+export function youngerThan(
+  years: number,
+  competition: Competition,
+): PersonFilter {
+  return (person) => {
     const personAge = getAge(person, competition);
     return personAge !== null && personAge < years;
   };
 }
 
-export function groupNumber(num: number): GroupFilter {
-  return (group) => {
-    const match = group.activityCode.match(/g(\d+)/);
-    if (!match?.[1]) return false;
-    return parseInt(match[1], 10) === num;
+export function hasRole(role: string): PersonFilter {
+  return (person) => (person.roles || []).includes(role);
+}
+
+export const isDelegate: PersonFilter = hasRole('delegate');
+export const isOrganizer: PersonFilter = hasRole('organizer');
+export const isTraineeDelegate: PersonFilter = hasRole('trainee-delegate');
+export const isStaffScrambler: PersonFilter = hasRole('staff-scrambler');
+export const isStaffRunner: PersonFilter = hasRole('staff-runner');
+export const isStaffJudge: PersonFilter = hasRole('staff-judge');
+
+export function hasStaffAssignments(person: Person): boolean {
+  return (person.assignments ?? []).some((a) =>
+    a.assignmentCode.startsWith('staff-'),
+  );
+}
+
+export function staffAssignmentCountBetween(
+  min: number,
+  max?: number,
+): PersonFilter {
+  return (person) => {
+    const count = (person.assignments ?? []).filter((a) =>
+      a.assignmentCode.startsWith('staff-'),
+    ).length;
+    if (count < min) return false;
+    if (max !== undefined && count > max) return false;
+    return true;
   };
+}
+
+export function booleanProperty(key: string): PersonFilter {
+  return (person) => getBooleanProperty(person, key);
+}
+
+export function stringProperty(key: string, value: string): PersonFilter {
+  return (person) => getStringProperty(person, key) === value;
+}
+
+export function stringPropertyIn(key: string, values: string[]): PersonFilter {
+  const valueSet = new Set(values);
+  return (person) => {
+    const propValue = getStringProperty(person, key);
+    return propValue !== null && valueSet.has(propValue);
+  };
+}
+
+export function numberPropertyGreaterThan(
+  key: string,
+  threshold: number,
+): PersonFilter {
+  return (person) => {
+    const value = getNumberProperty(person, key);
+    return value !== null && value > threshold;
+  };
+}
+
+export function numberPropertyLessThan(
+  key: string,
+  threshold: number,
+): PersonFilter {
+  return (person) => {
+    const value = getNumberProperty(person, key);
+    return value !== null && value < threshold;
+  };
+}
+
+export function numberPropertyBetween(
+  key: string,
+  min: number,
+  max: number,
+): PersonFilter {
+  return (person) => {
+    const value = getNumberProperty(person, key);
+    return value !== null && value >= min && value <= max;
+  };
+}
+
+export function numberPropertyEquals(key: string, value: number): PersonFilter {
+  return (person) => getNumberProperty(person, key) === value;
+}
+
+export function hasProperty(key: string): PersonFilter {
+  return (person) => hasPersonProperty(person, key);
+}
+
+export function groupNumber(num: number): GroupFilter {
+  return (group) => extractGroupNumber(group.activityCode) === num;
 }
 
 export function groupNumberBetween(min: number, max: number): GroupFilter {
   return (group) => {
-    const match = group.activityCode.match(/g(\d+)/);
-    if (!match?.[1]) return false;
-    const num = parseInt(match[1], 10);
+    const num = extractGroupNumber(group.activityCode);
+    if (num === null) return false;
     return num >= min && num <= max;
   };
 }
@@ -254,19 +331,7 @@ export function forRound(roundId: string): GroupFilter {
 }
 
 export const allGroups: GroupFilter = () => true;
-
 export const noGroups: GroupFilter = () => false;
 
-export function wcaIds(...ids: string[]): PersonFilter {
-  const idSet = new Set(ids);
-  return (person) => person.wcaId != null && idSet.has(person.wcaId);
-}
-
-export function registrantIds(...ids: number[]): PersonFilter {
-  const idSet = new Set(ids);
-  return (person) => idSet.has(person.registrantId);
-}
-
 export const everyone: PersonFilter = () => true;
-
 export const nobody: PersonFilter = () => false;

@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import type { ExecutionContext } from '../runtime/context';
+import type { ExecutionContext } from '@/engine';
 import type {
   Activity,
   Group,
@@ -8,8 +8,10 @@ import type {
   PersonAssignment,
   Round,
   StaffAssignmentResult,
+  StaffScorer,
 } from '../types/core';
 import solver from '../types/lp-solver';
+import type { RegistrantId } from '../types/wcif';
 import { parseActivityCode } from './activity-code';
 import {
   getActivityById,
@@ -17,37 +19,9 @@ import {
   getGroupsForRoundCode,
   getMiscActivityForId,
 } from './groups-helpers';
+import { fisherYatesShuffle } from './utils';
 
-function shuffle<T>(array: T[]): void {
-  let cur = array.length;
-
-  while (cur !== 0) {
-    const rnd = Math.floor(Math.random() * cur);
-
-    cur--;
-    const temp = array[cur];
-
-    const rndItem = array[rnd];
-    if (temp !== undefined && rndItem !== undefined) {
-      array[cur] = rndItem;
-      array[rnd] = temp;
-    }
-  }
-}
-
-import type { Competition } from '../types/wcif';
-
-export interface StaffScorer {
-  caresAboutJobs?: boolean;
-  caresAboutStations?: boolean;
-  Score: (
-    competition: Competition,
-    person: Person,
-    activity: Activity,
-    jobName?: string,
-    stationNumber?: number,
-  ) => number;
-}
+export type { StaffScorer } from '../types/core';
 
 const _VALID_STAFF_ASSIGNMENT_CODES = [
   'staff-judge',
@@ -149,7 +123,7 @@ function AssignImpl(
 
   const warnings: string[] = [];
 
-  const assignmentMap = new Map<number, PersonAssignment>();
+  const assignmentMap = new Map<RegistrantId, PersonAssignment>();
   const jobAssignments: Record<
     string,
     Record<number, { person: Person; score: number }[]>
@@ -168,7 +142,7 @@ function AssignImpl(
   });
 
   const unavailableByPerson: Record<
-    number,
+    RegistrantId,
     ((activity: Activity) => boolean)[]
   > = {};
 
@@ -176,7 +150,7 @@ function AssignImpl(
     unavailableByPerson[person.registrantId] = unavailable(person) || [];
   });
 
-  const assignmentsThisCall = new Map<number, Set<number>>();
+  const assignmentsThisCall = new Map<RegistrantId, Set<number>>();
 
   activities.forEach((activity) => {
     console.log(
@@ -419,9 +393,9 @@ function AssignImpl(
       }
     });
 
-    shuffle(eligiblePeople);
+    const shuffledPeople = fisherYatesShuffle(eligiblePeople);
 
-    eligiblePeople.forEach((person, idx) => {
+    shuffledPeople.forEach((person, idx) => {
       constraints[`person-${idx}`] = { min: 0, max: 1 };
 
       let personScore = 0;
@@ -429,7 +403,7 @@ function AssignImpl(
       scorers.forEach((scorer) => {
         if (!scorer.caresAboutJobs) {
           personScore =
-            personScore + scorer.Score(competition, person, activity);
+            personScore + scorer.score(competition, person, activity);
         }
       });
 
@@ -443,7 +417,7 @@ function AssignImpl(
         scorers.forEach((scorer) => {
           if (scorer.caresAboutJobs && !scorer.caresAboutStations) {
             jobScore =
-              jobScore + scorer.Score(competition, person, activity, job.name);
+              jobScore + scorer.score(competition, person, activity, job.name);
           }
         });
 
@@ -458,7 +432,7 @@ function AssignImpl(
             if (scorer.caresAboutStations && stationNum !== null) {
               score =
                 score +
-                scorer.Score(
+                scorer.score(
                   competition,
                   person,
                   activity,
@@ -529,7 +503,7 @@ function AssignImpl(
     >();
 
     jobs.forEach((job) => {
-      eligiblePeople.forEach((_person, idx) => {
+      shuffledPeople.forEach((_person, idx) => {
         const stations = job.assignStations
           ? Array.from({ length: job.count }, (_, i) => i)
           : [null];
@@ -558,7 +532,7 @@ function AssignImpl(
 
       const parts = key.split('-');
       const personIdx = parseInt(parts[1] || '0', 10);
-      const person = eligiblePeople[personIdx];
+      const person = shuffledPeople[personIdx];
 
       if (!person) {
         return;
@@ -569,7 +543,7 @@ function AssignImpl(
       scorers.forEach((scorer) => {
         totalScore =
           totalScore +
-          scorer.Score(
+          scorer.score(
             competition,
             person,
             activity,
@@ -586,14 +560,25 @@ function AssignImpl(
         return;
       }
 
-      if (!jobAssignments[jobKey]) {
+      if (!(jobKey in jobAssignments)) {
         jobAssignments[jobKey] = {};
       }
-      if (!jobAssignments[jobKey][activityId]) {
-        jobAssignments[jobKey][activityId] = [];
+
+      const jobAssignment = jobAssignments[jobKey];
+      if (!jobAssignment) {
+        return;
       }
 
-      jobAssignments[jobKey][activityId].push({
+      if (!(activityId in jobAssignment)) {
+        jobAssignment[activityId] = [];
+      }
+
+      const activityAssignments = jobAssignment[activityId];
+      if (!activityAssignments) {
+        return;
+      }
+
+      activityAssignments.push({
         person,
         score: totalScore,
       });

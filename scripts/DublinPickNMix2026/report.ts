@@ -1,6 +1,7 @@
 import { competingIn, competingInAny, createTypeComp } from '@/lib/api';
 import type { Person } from '@/lib/types/core';
-import { COMPETITION_ID, classifyRounds } from './config';
+import { COMPETITION_ID } from './config';
+import { classifyRounds } from './util';
 
 const EVENT_POINTS: Record<string, number> = {
   '333': 0,
@@ -310,6 +311,21 @@ for (const eventGroup of parallelEventGroups) {
       }
     }
 
+    let waveActivityId: number | null = null;
+    for (const venue of tc.competition.schedule.venues) {
+      for (const room of venue.rooms) {
+        const waveActivity = room.activities.find(
+          (a) =>
+            a.activityCode === 'other-misc' && a.name === `Wave ${waveNum}`,
+        );
+        if (waveActivity) {
+          waveActivityId = waveActivity.id;
+          break;
+        }
+      }
+      if (waveActivityId) break;
+    }
+
     const waveCompetitors: {
       person: Person;
       station: number;
@@ -320,12 +336,24 @@ for (const eventGroup of parallelEventGroups) {
       const person = tc.persons.byId(personId);
       if (!person) continue;
 
-      const station =
-        person.assignments?.find(
+      let station = 0;
+      if (waveActivityId) {
+        const waveAssignment = person.assignments?.find(
+          (a) =>
+            a.activityId === waveActivityId &&
+            a.assignmentCode === 'competitor',
+        );
+        station = waveAssignment?.stationNumber ?? 0;
+      }
+
+      if (station === 0 || station === null) {
+        const groupAssignment = person.assignments?.find(
           (a) =>
             waveGroupIds.includes(a.activityId ?? 0) &&
             a.assignmentCode === 'competitor',
-        )?.stationNumber ?? 0;
+        );
+        station = groupAssignment?.stationNumber ?? 0;
+      }
 
       const events = eventGroup.filter((eid) => competingIn(eid)(person));
       waveCompetitors.push({ person, station, events });
@@ -340,32 +368,33 @@ for (const eventGroup of parallelEventGroups) {
       );
     }
 
-    if (anchorGroupId) {
+    if (waveActivityId) {
       const staff = tc.persons.filter((p) =>
         (p.assignments ?? []).some(
           (a) =>
-            a.activityId === anchorGroupId && a.assignmentCode !== 'competitor',
+            a.activityId === waveActivityId &&
+            a.assignmentCode !== 'competitor',
         ),
       );
 
       const scramblers = staff.filter((p) =>
         (p.assignments ?? []).some(
           (a) =>
-            a.activityId === anchorGroupId &&
+            a.activityId === waveActivityId &&
             a.assignmentCode === 'staff-scrambler',
         ),
       );
       const runners = staff.filter((p) =>
         (p.assignments ?? []).some(
           (a) =>
-            a.activityId === anchorGroupId &&
+            a.activityId === waveActivityId &&
             a.assignmentCode === 'staff-runner',
         ),
       );
       const judges = staff.filter((p) =>
         (p.assignments ?? []).some(
           (a) =>
-            a.activityId === anchorGroupId &&
+            a.activityId === waveActivityId &&
             a.assignmentCode === 'staff-judge',
         ),
       );
@@ -380,6 +409,8 @@ for (const eventGroup of parallelEventGroups) {
       if (judges.length > 0)
         console.log(`  Judges: ${judges.map((p) => p.name).join(', ')}`);
       if (staff.length === 0) console.log(`  (No staff assigned)`);
+    } else {
+      console.log(`\nStaff: (Wave activity not found)`);
     }
   }
 
