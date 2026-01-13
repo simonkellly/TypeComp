@@ -29,87 +29,70 @@ import { ASSIGNMENT_OPTIONS, COMPETITION_ID, WAVE_EXCLUSIONS } from './config';
 import { classifyRounds } from './util';
 
 const { maxGroupSize, scramblers, runners } = ASSIGNMENT_OPTIONS;
+const defaultJudges = ASSIGNMENT_OPTIONS.judges ?? 0;
 
 const tc = await createTypeComp(COMPETITION_ID);
 const { normalRounds, parallelEventGroups } = classifyRounds(tc);
+
+function assignBlindfoldedRound(roundId: string) {
+  const competitors = tc.persons.filter(competingIn('333bf'));
+  if (competitors.length === 0) return;
+
+  const ONE_MINUTE_CS = 6000;
+  const slowCompetitors = competitors.filter(
+    (p) => (PersonalBest(p, '333bf', 'single') ?? Infinity) >= ONE_MINUTE_CS,
+  );
+  const fastCompetitors = competitors.filter(
+    (p) => (PersonalBest(p, '333bf', 'single') ?? 0) < ONE_MINUTE_CS,
+  );
+
+  tc.round(roundId).createGroups(2);
+  const roundBuilder = tc.round(roundId);
+  if (slowCompetitors.length > 0) {
+    roundBuilder.manuallyAssign((p) => slowCompetitors.includes(p), 1);
+  }
+  if (fastCompetitors.length > 0) {
+    roundBuilder.manuallyAssign((p) => fastCompetitors.includes(p), 2);
+  }
+  roundBuilder.stations.bySpeed('333bf', 'single');
+  roundBuilder.assign();
+
+  const staffScorer = combineStaffScorers(
+    fastestScrambler('333bf'),
+    followingGroupScorer(-50, 10),
+    delegateDeprioritizer(-1000),
+  );
+
+  const staffAssigned = [1, 2]
+    .map((groupNum) => {
+      const comps = groupNum === 1 ? slowCompetitors : fastCompetitors;
+      if (comps.length === 0 || defaultJudges === 0) return 0;
+      return tc
+        .staff(roundId)
+        .groups(groupNumber(groupNum))
+        .from(registered)
+        .judges(Math.min(defaultJudges, comps.length))
+        .scramblers(scramblers, canScramble('333bf'))
+        .runners(runners)
+        .preferFastScramblers()
+        .scorer(staffScorer)
+        .avoidConflicts(true)
+        .overwrite(true)
+        .assign().assigned;
+    })
+    .reduce((sum, n) => sum + n, 0);
+
+  tc.round(roundId).scrambleSetCountFromUniqueGroups();
+  console.log(
+    `✓ ${roundId}: ${slowCompetitors.length} slow + ${fastCompetitors.length} fast = ${competitors.length} competitors, ${staffAssigned} staff`,
+  );
+}
 
 console.log('\n=== Assigning First Rounds ===\n');
 
 const blindfoldedRoundId = '333bf-r1';
 if (normalRounds.includes(blindfoldedRoundId)) {
-  const competitors = tc.persons.filter(competingIn('333bf'));
-  if (competitors.length > 0) {
-    const ONE_MINUTE_CS = 6000;
-    const slowCompetitors = competitors.filter((p) => {
-      const pbSingle = PersonalBest(p, '333bf', 'single');
-      return pbSingle === null || pbSingle >= ONE_MINUTE_CS;
-    });
-    const fastCompetitors = competitors.filter((p) => {
-      const pbSingle = PersonalBest(p, '333bf', 'single');
-      return pbSingle !== null && pbSingle < ONE_MINUTE_CS;
-    });
-
-    tc.round(blindfoldedRoundId).createGroups(2);
-
-    const roundBuilder = tc.round(blindfoldedRoundId);
-    if (slowCompetitors.length > 0) {
-      roundBuilder.manuallyAssign((p) => slowCompetitors.includes(p), 1);
-    }
-    if (fastCompetitors.length > 0) {
-      roundBuilder.manuallyAssign((p) => fastCompetitors.includes(p), 2);
-    }
-
-    roundBuilder.stations.bySpeed('333bf', 'single');
-    roundBuilder.assign();
-
-    const staffScorer = combineStaffScorers(
-      fastestScrambler('333bf'),
-      followingGroupScorer(-50, 10),
-      delegateDeprioritizer(-1000),
-    );
-
-    const defaultJudges = ASSIGNMENT_OPTIONS.judges ?? 0;
-    let staffAssigned = 0;
-
-    if (slowCompetitors.length > 0 && defaultJudges > 0) {
-      const groupJudges = Math.min(defaultJudges, slowCompetitors.length);
-      const staffResult = tc
-        .staff(blindfoldedRoundId)
-        .groups(groupNumber(1))
-        .from(registered)
-        .judges(groupJudges)
-        .scramblers(scramblers, canScramble('333bf'))
-        .runners(runners)
-        .preferFastScramblers()
-        .scorer(staffScorer)
-        .avoidConflicts(true)
-        .overwrite(true)
-        .assign();
-      staffAssigned += staffResult.assigned;
-    }
-
-    if (fastCompetitors.length > 0 && defaultJudges > 0) {
-      const groupJudges = Math.min(defaultJudges, fastCompetitors.length);
-      const staffResult = tc
-        .staff(blindfoldedRoundId)
-        .groups(groupNumber(2))
-        .from(registered)
-        .judges(groupJudges)
-        .scramblers(scramblers, canScramble('333bf'))
-        .runners(runners)
-        .preferFastScramblers()
-        .scorer(staffScorer)
-        .avoidConflicts(true)
-        .overwrite(true)
-        .assign();
-      staffAssigned += staffResult.assigned;
-    }
-
-    tc.round(blindfoldedRoundId).scrambleSetCountFromUniqueGroups();
-    console.log(
-      `✓ ${blindfoldedRoundId}: ${slowCompetitors.length} slow + ${fastCompetitors.length} fast = ${competitors.length} competitors, ${staffAssigned} staff`,
-    );
-  }
+  assignBlindfoldedRound(blindfoldedRoundId);
 }
 
 for (const roundId of normalRounds) {
@@ -133,16 +116,11 @@ for (const roundId of normalRounds) {
   );
 }
 
-console.log('\n=== Assigning Parallel Wave Events ===\n');
-
-for (const eventGroup of parallelEventGroups) {
-  if (eventGroup.length === 0) continue;
-
+async function assignParallelWaveEvents(eventGroup: string[]) {
   const competitors = tc.persons.filter(competingInAny(...eventGroup));
-  if (competitors.length === 0) continue;
+  if (competitors.length === 0) return;
 
   const numWaves = Math.ceil(competitors.length / maxGroupSize);
-
   for (const eventId of eventGroup) {
     try {
       tc.round(`${eventId}-r1`).createGroups(numWaves);
@@ -156,21 +134,43 @@ for (const eventGroup of parallelEventGroups) {
     waveExclusions: WAVE_EXCLUSIONS,
   });
 
-  const stationAssignments = assignStationsForWaves(
-    competitors,
-    result.assignments,
-    numWaves,
-    eventGroup,
-  );
+  const stationAssignments = new Map<number, number>();
+  for (let waveNum = 1; waveNum <= numWaves; waveNum++) {
+    const waveCompetitors = competitors.filter(
+      (p) => result.assignments.get(p.registrantId) === waveNum,
+    );
+    for (const [pId, station] of assignStationsBySpeed(
+      waveCompetitors,
+      eventGroup,
+    )) {
+      stationAssignments.set(pId, station);
+    }
+  }
 
   for (const eventId of eventGroup) {
-    applyCompetitorAssignments(
-      tc,
-      eventId,
-      result.assignments,
-      stationAssignments,
+    const roundId = `${eventId}-r1`;
+    const groups = tc.groups(roundId);
+    const groupsByNumber = new Map(
+      groups.map((g) => [getGroupNumber(g) ?? 0, g.id]),
     );
-    tc.round(`${eventId}-r1`).scrambleSetCount(
+
+    for (const [personId, waveNum] of result.assignments) {
+      const person = tc.persons.byId(personId);
+      const groupId = groupsByNumber.get(waveNum);
+      if (person && groupId && competingIn(eventId)(person)) {
+        person.assignments = (person.assignments ?? []).filter(
+          (a) =>
+            a.assignmentCode !== 'competitor' ||
+            !groups.some((g) => g.id === a.activityId),
+        );
+        person.assignments.push({
+          activityId: groupId,
+          assignmentCode: 'competitor',
+          stationNumber: stationAssignments.get(personId) ?? null,
+        });
+      }
+    }
+    tc.round(roundId).scrambleSetCount(
       new Set(result.assignments.values()).size,
     );
   }
@@ -179,10 +179,8 @@ for (const eventGroup of parallelEventGroups) {
     tc.persons.all(),
     result.assignments,
     numWaves,
-    WAVE_EXCLUSIONS,
   );
-
-  assignStaffToWaves(tc, eventGroup, staffWaveAssignment, numWaves);
+  assignStaffToWaves(eventGroup, staffWaveAssignment, numWaves);
 
   for (const eventId of eventGroup) {
     const removed = clearEmptyGroups(tc.competition, `${eventId}-r1`);
@@ -197,6 +195,12 @@ for (const eventGroup of parallelEventGroups) {
   );
 }
 
+console.log('\n=== Assigning Parallel Wave Events ===\n');
+
+for (const eventGroup of parallelEventGroups) {
+  if (eventGroup.length > 0) await assignParallelWaveEvents(eventGroup);
+}
+
 const orphansRemoved = removeOrphanAssignments(tc.competition);
 if (orphansRemoved > 0) {
   console.log(`\n✓ Removed ${orphansRemoved} orphan assignment(s)`);
@@ -206,99 +210,45 @@ console.log('\n=== Saving ===\n');
 await tc.commit();
 console.log('✓ Done!');
 
-function assignStationsForWaves(
-  competitors: ReturnType<typeof tc.persons.filter>,
-  assignments: Map<number, number>,
-  numWaves: number,
-  eventGroup: string[],
-): Map<number, number> {
-  const stationAssignments = new Map<number, number>();
-  for (let waveNum = 1; waveNum <= numWaves; waveNum++) {
-    const waveCompetitors = competitors.filter(
-      (p) => assignments.get(p.registrantId) === waveNum,
-    );
-    for (const [pId, station] of assignStationsBySpeed(
-      waveCompetitors,
-      eventGroup,
-    )) {
-      stationAssignments.set(pId, station);
-    }
-  }
-  return stationAssignments;
-}
-
-function applyCompetitorAssignments(
-  tc: Awaited<ReturnType<typeof createTypeComp>>,
-  eventId: string,
-  assignments: Map<number, number>,
-  stationAssignments: Map<number, number>,
-): void {
-  const roundId = `${eventId}-r1`;
-  const groups = tc.groups(roundId);
-  const groupsByNumber = new Map(
-    groups.map((g) => [getGroupNumber(g) ?? 0, g.id]),
-  );
-
-  for (const [personId, waveNum] of assignments) {
-    const person = tc.persons.byId(personId);
-    const groupId = groupsByNumber.get(waveNum);
-
-    if (person && groupId && competingIn(eventId)(person)) {
-      person.assignments = (person.assignments ?? []).filter(
-        (a) =>
-          a.assignmentCode !== 'competitor' ||
-          !groups.some((g) => g.id === a.activityId),
-      );
-      person.assignments.push({
-        activityId: groupId,
-        assignmentCode: 'competitor',
-        stationNumber: stationAssignments.get(personId) ?? null,
-      });
-    }
-  }
-}
-
 function distributeStaffAcrossWaves(
   allPersons: ReturnType<typeof tc.persons.all>,
   competitorAssignments: Map<number, number>,
   numWaves: number,
-  waveExclusions: Map<number, number[]>,
 ): Map<number, number> {
   const canStaffWaves = new Map<number, number[]>();
   for (const person of allPersons) {
     if (!registered(person)) continue;
-    const myWave = competitorAssignments.get(person.registrantId) ?? null;
-    const excludedWaves = waveExclusions.get(person.registrantId) ?? [];
-    const available: number[] = [];
-    for (let w = 1; w <= numWaves; w++) {
-      if (w === myWave) continue;
-      if (excludedWaves.includes(w)) continue;
-      available.push(w);
-    }
-    canStaffWaves.set(person.registrantId, available);
+    const myWave = competitorAssignments.get(person.registrantId);
+    const excludedWaves = WAVE_EXCLUSIONS.get(person.registrantId) ?? [];
+    const available = Array.from({ length: numWaves }, (_, i) => i + 1).filter(
+      (w) => w !== myWave && !excludedWaves.includes(w),
+    );
+    if (available.length > 0) canStaffWaves.set(person.registrantId, available);
   }
 
   const staffWaveAssignment = new Map<number, number>();
-  const waveStaffCounts = new Map<number, number>();
-  for (let w = 1; w <= numWaves; w++) waveStaffCounts.set(w, 0);
+  const waveStaffCounts = new Map(
+    Array.from({ length: numWaves }, (_, i) => [i + 1, 0]),
+  );
 
-  const sortedPersons = [...canStaffWaves.entries()]
-    .filter(([, waves]) => waves.length > 0)
-    .sort((a, b) => a[1].length - b[1].length);
+  const sortedPersons = [...canStaffWaves.entries()].sort(
+    (a, b) => a[1].length - b[1].length,
+  );
 
   for (const [personId, availableWaves] of sortedPersons) {
-    let bestWave: number | null = null;
-    let bestCount = Infinity;
-    for (const w of availableWaves) {
+    if (availableWaves.length === 0) continue;
+    const firstWave = availableWaves[0];
+    if (firstWave === undefined) continue;
+
+    const bestWave = availableWaves.reduce((best: number, w: number) => {
       const count = waveStaffCounts.get(w) ?? 0;
-      if (count < maxGroupSize && count < bestCount) {
-        bestCount = count;
-        bestWave = w;
-      }
-    }
-    if (bestWave !== null) {
+      const bestCount = waveStaffCounts.get(best) ?? 0;
+      return count < maxGroupSize && count < bestCount ? w : best;
+    }, firstWave);
+    const bestCount = waveStaffCounts.get(bestWave) ?? 0;
+    if (bestCount < maxGroupSize) {
       staffWaveAssignment.set(personId, bestWave);
-      waveStaffCounts.set(bestWave, (waveStaffCounts.get(bestWave) ?? 0) + 1);
+      waveStaffCounts.set(bestWave, bestCount + 1);
     }
   }
 
@@ -306,7 +256,6 @@ function distributeStaffAcrossWaves(
 }
 
 function assignStaffToWaves(
-  tc: Awaited<ReturnType<typeof createTypeComp>>,
   eventGroup: string[],
   staffWaveAssignment: Map<number, number>,
   numWaves: number,
@@ -350,14 +299,13 @@ function assignStaffToWaves(
     const activities = waveGroups
       .map((g) => getActivityById(tc.competition, g.id))
       .filter((a): a is NonNullable<typeof a> => a !== null);
-    const startTime = activities.reduce(
-      (min, a) => (!min || a.startTime < min ? a.startTime : min),
-      null as string | null,
-    );
-    const endTime = activities.reduce(
-      (max, a) => (!max || a.endTime > max ? a.endTime : max),
-      null as string | null,
-    );
+    if (activities.length === 0) continue;
+
+    const startTime = activities.map((a) => a.startTime).sort()[0];
+    const endTime = activities
+      .map((a) => a.endTime)
+      .sort()
+      .reverse()[0];
     if (!startTime || !endTime) continue;
 
     const waveActivityId = maxActivityId(tc.competition) + 1;
@@ -374,12 +322,14 @@ function assignStaffToWaves(
       extensions: [],
     });
 
-    const waveCompetitors = tc.persons.all().filter((p) => {
-      return (p.assignments ?? []).some(
-        (a) =>
-          a.assignmentCode === 'competitor' && waveGroupIds.has(a.activityId),
+    const waveCompetitors = tc.persons
+      .all()
+      .filter((p) =>
+        (p.assignments ?? []).some(
+          (a) =>
+            a.assignmentCode === 'competitor' && waveGroupIds.has(a.activityId),
+        ),
       );
-    });
     const waveStationAssignments = assignStationsBySpeed(
       waveCompetitors,
       eventGroup,
